@@ -14,9 +14,9 @@ load_dotenv()
 from flask_sock import Sock
 sock = Sock(app)
 
-# --- Gemini Setup ---
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# --- API Configuration ---
 try:
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
     genai.configure(api_key=GEMINI_API_KEY)
     gemini_model = genai.GenerativeModel("gemini-1.5-flash-latest")
     print("✅ Gemini Model configured successfully.")
@@ -24,8 +24,13 @@ except Exception as e:
     print(f"❌ Error configuring Gemini: {e}")
     gemini_model = None
 
-# --- Google Cloud Speech-to-Text Setup ---
-speech_client = speech.SpeechClient()
+try:
+    speech_client = speech.SpeechClient()
+    print("✅ Google Cloud Speech-to-Text client configured successfully.")
+except Exception as e:
+    print(f"❌ Error configuring Google Cloud Speech client: {e}")
+    speech_client = None
+
 
 def get_gemini_extraction(transcript, source_lang):
     """Sends the final transcript to Gemini for translation and structured data extraction."""
@@ -35,8 +40,7 @@ def get_gemini_extraction(transcript, source_lang):
         return {"error": "Cannot process empty transcript."}
 
     source_language_full_name = "English" if source_lang == "en" else "Malayalam"
-
-    # --- CHANGED: Updated the prompt to include "Duration" ---
+    
     smart_prompt = f"""
     You are an advanced medical transcription AI. Your input is raw text from a speech-to-text system.
     The source language of the text is {source_language_full_name}.
@@ -53,34 +57,22 @@ def get_gemini_extraction(transcript, source_lang):
     {{
       "final_english_text": "The fully translated and normalized English text",
       "extracted_terms": {{
-        "Medicine Names": ["...", "..."],
-        "Dosage & Frequency": ["...", "..."],
-        "Diseases / Conditions": ["...", "..."],
-        "Symptoms": ["...", "..."],
-        "Medical Procedures / Tests": ["...", "..."],
-        "Duration": ["...", "..."],
-        "Doctor's Instructions": ["...", "..."]
+        "Medicine Names": [], "Dosage & Frequency": [], "Diseases / Conditions": [],
+        "Symptoms": [], "Medical Procedures / Tests": [], "Duration": [], "Doctor's Instructions": []
       }},
       "source_language": "{source_lang}"
     }}
 
     Important Rules:
-    - Always output valid JSON.
-    - The "source_language" in the JSON must be "{source_lang}".
-    - Extract ALL medical terms you can find.
-    - If no terms found in a category, return an empty array.
+    - Always output valid JSON. The "source_language" in the JSON must be "{source_lang}".
+    - Extract ALL medical terms you can find. If a category is empty, use an empty array [].
     """
     try:
         response = gemini_model.generate_content(smart_prompt)
         cleaned_json_string = response.text.strip().replace("```json", "").replace("```", "").strip()
         result = json.loads(cleaned_json_string)
         
-        # --- CHANGED: Added fallback for the new "Duration" category ---
-        if "extracted_terms" not in result:
-            result["extracted_terms"] = {
-                "Medicine Names": [], "Dosage & Frequency": [], "Diseases / Conditions": [],
-                "Symptoms": [], "Medical Procedures / Tests": [], "Duration": [], "Doctor's Instructions": []
-            }
+        if "extracted_terms" not in result: result["extracted_terms"] = {}
         result["source_language"] = source_lang
         return result
     except Exception as e:
@@ -95,24 +87,22 @@ def speech_socket(ws, lang_code):
     """Handles the WebSocket connection for live speech transcription."""
     print(f"🟢 Client connected for language: {lang_code}. Starting Google STT stream...")
     
-    if lang_code == 'ml':
-        config = speech.RecognitionConfig(
-            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-            sample_rate_hertz=16000,
-            language_code="ml-IN",
-            enable_automatic_punctuation=True,
-            model="latest_long" 
-        )
-    else: 
-        lang_code = 'en'
-        config = speech.RecognitionConfig(
-            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-            sample_rate_hertz=16000,
-            language_code="en-US",
-            enable_automatic_punctuation=True,
-            model="medical_dictation"
-        )
+    if not speech_client:
+        print("🔴 Speech client not available. Closing connection.")
+        return
 
+    model_config = {
+        'ml': {"language_code": "ml-IN", "model": "latest_long"},
+        'en': {"language_code": "en-US", "model": "medical_dictation"}
+    }
+    selected_config = model_config.get(lang_code, model_config['en'])
+
+    config = speech.RecognitionConfig(
+        encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+        sample_rate_hertz=16000,
+        enable_automatic_punctuation=True,
+        **selected_config
+    )
     streaming_config = speech.StreamingRecognitionConfig(
         config=config,
         interim_results=True
@@ -124,12 +114,10 @@ def speech_socket(ws, lang_code):
                 message = websocket.receive()
                 if message is None: break
                 if isinstance(message, str):
-                    try:
-                        data = json.loads(message)
-                        if data.get('type') == 'end_stream':
-                            print("Generator: Received 'end_stream' signal. Ending audio stream.")
-                            break
-                    except json.JSONDecodeError: continue
+                    data = json.loads(message)
+                    if data.get('type') == 'end_stream':
+                        print("Generator: Received 'end_stream' signal.")
+                        break
                 else: 
                     yield speech.StreamingRecognizeRequest(audio_content=message)
         except Exception as e:
@@ -143,10 +131,11 @@ def speech_socket(ws, lang_code):
         final_transcript = ""
         for response in responses:
             if not ws.connected: break
-            if not response.results: continue
+            if not response.results or not response.results[0].alternatives: continue
+            
             result = response.results[0]
-            if not result.alternatives: continue
             transcript = result.alternatives[0].transcript
+            
             ws.send(json.dumps({ "type": "transcript", "is_final": result.is_final, "text": transcript }))
             if result.is_final: final_transcript += transcript + " "
 
@@ -160,10 +149,9 @@ def speech_socket(ws, lang_code):
         except: pass
     finally:
         print("🔴 Stream closed.")
-        try:
-            if ws.connected: ws.close()
-        except: pass
+        if ws.connected:
+            try: ws.close()
+            except: pass
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))  # Use dynamic port provided by Railway
-    app.run(host='0.0.0.0', port=port, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True)
