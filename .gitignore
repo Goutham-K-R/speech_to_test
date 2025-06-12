@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+*.egg
+*.env
+.env.*
+.venv/
+venv/
+ENV/
+env/
+pip-wheel-metadata/
+dist/
+build/
+
+# VS Code
+.vscode/
+
+# MacOS
+.DS_Store
+
+# PyCharm
+.idea/
+
+# Logs
+*.log
+
+# Railway or Deployment
+*.db
+instance/
+.env
+*.sqlite3
+*.sqlite
+config.py
+
+# Misc
+*.bak
+*.swp
+*.swo
+
+# Google Cloud credentials (Never commit this!)
+google_credentials.json
+
+# Node.js (if frontend in same repo)
+node_modules/
+
+# React / Flutter builds (if used later)
+build/
+dist/
