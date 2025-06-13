@@ -1,10 +1,30 @@
-Flask
-flask-cors
-flask-sockets
-gevent
-gevent-websocket
-python-dotenv==1.0.1
-google-generativeai==0.3.2
-google-cloud-speech==2.24.0
-flask-sock
-flask-socketio==5.3.4
+# Flask
+# flask-cors
+# flask-sockets
+# gevent
+# gevent-websocket
+# python-dotenv==1.0.1
+# google-generativeai==0.3.2
+# google-cloud-speech==2.24.0
+# flask-sock
+# flask-socketio==5.3.4
+# # START OF FILE requirements.txt
+
+# Flask
+# flask-cors
+# flask-sock
+# gevent
+# python-dotenv==1.0.1
+# google-generativeai==0.3.2
+# google-cloud-speech==2.24.0
+# gunicorn  # Production server
+# # START OF FILE: requirements.txt
+
+flask
+flask_cors
+python-dotenv
+google-generativeai
+google-cloud-speech
+flask_sock
+gunicorn
+gevent  

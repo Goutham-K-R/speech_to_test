@@ -1,5 +1,8 @@
+# START OF FILE: speech_to_text_app.py
+
 import os
 import json
+import tempfile # Required for handling credentials in production
 from flask import Flask
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -9,14 +12,33 @@ from google.cloud import speech
 # --- Basic Setup ---
 app = Flask(__name__)
 CORS(app)
-load_dotenv()
+load_dotenv() # Loads .env file for local development
 
 from flask_sock import Sock
 sock = Sock(app)
 
+def setup_google_credentials():
+    google_creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+    if google_creds_json:
+        # In a production environment, write the credentials to a temporary file
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as temp_f:
+            temp_f.write(google_creds_json)
+            filepath = temp_f.name
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = filepath
+        print("✅ Google Credentials configured from GOOGLE_CREDENTIALS_JSON environment variable.")
+    elif os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
+        # For local development where the path is already set
+        print("✅ Google Credentials configured from GOOGLE_APPLICATION_CREDENTIALS path.")
+    else:
+        print("⚠️  WARNING: Google Cloud credentials not found. Speech-to-Text will fail.")
+
+setup_google_credentials() # Call the setup function at startup
+
 # --- API Configuration ---
 try:
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    if not GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY not found in environment.")
     genai.configure(api_key=GEMINI_API_KEY)
     gemini_model = genai.GenerativeModel("gemini-1.5-flash-latest")
     print("✅ Gemini Model configured successfully.")
@@ -25,15 +47,16 @@ except Exception as e:
     gemini_model = None
 
 try:
+    # The speech client will now automatically use the credentials we set up above
     speech_client = speech.SpeechClient()
     print("✅ Google Cloud Speech-to-Text client configured successfully.")
 except Exception as e:
     print(f"❌ Error configuring Google Cloud Speech client: {e}")
     speech_client = None
 
+# ... The rest of your code remains exactly the same ...
 
 def get_gemini_extraction(transcript, source_lang):
-    """Sends the final transcript to Gemini for translation and structured data extraction."""
     if not gemini_model:
         return {"error": "Gemini model not configured."}
     if not transcript.strip():
@@ -84,11 +107,10 @@ def get_gemini_extraction(transcript, source_lang):
 
 @sock.route('/speech/<lang_code>')
 def speech_socket(ws, lang_code):
-    """Handles the WebSocket connection for live speech transcription."""
     print(f"🟢 Client connected for language: {lang_code}. Starting Google STT stream...")
-    
     if not speech_client:
         print("🔴 Speech client not available. Closing connection.")
+        ws.close(reason=1011, message="Server-side speech client not configured.")
         return
 
     model_config = {
@@ -132,10 +154,8 @@ def speech_socket(ws, lang_code):
         for response in responses:
             if not ws.connected: break
             if not response.results or not response.results[0].alternatives: continue
-            
             result = response.results[0]
             transcript = result.alternatives[0].transcript
-            
             ws.send(json.dumps({ "type": "transcript", "is_final": result.is_final, "text": transcript }))
             if result.is_final: final_transcript += transcript + " "
 
@@ -153,5 +173,6 @@ def speech_socket(ws, lang_code):
             try: ws.close()
             except: pass
 
+# This block is for local testing only. Gunicorn (the production server) will not use it.
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
